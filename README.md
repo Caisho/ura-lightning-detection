@@ -54,7 +54,10 @@ Professional subscription-based lightning alert system that provides real-time l
 ### Raspberry Pi Hardware Setup
 
 - **Raspberry Pi 4 Model B** (4GB RAM recommended)
-- **MicroSD Card** (32GB Class 10 or higher)
+- **MicroSD Card** (32-64GB Class 10/UHS-I U3 with A1/A2 rating)
+  - **Recommended**: Samsung EVO Select 64GB UHS-I U3 A2 (~$15-20)
+  - **Budget Option**: Kingston Canvas React 32GB UHS-I U3 A1 (~$10-15)
+  - **Avoid**: Generic brands, Class 4 or lower, cards without A1/A2 rating
 - **LED and Resistor** (220Ω resistor for LED current limiting)
 - **Jumper Wires** for GPIO connections
 - **Breadboard** (for prototyping) or **Perfboard** (for permanent installation)
@@ -1143,7 +1146,7 @@ The NEA Lightning Alert API returns real-time lightning detection data in the fo
 
 **Required Components:**
 - **Raspberry Pi 4 Model B** (4GB RAM) - $75
-- **MicroSD Card** 32GB Class 10 - $12
+- **MicroSD Card** 64GB UHS-I U3 A2 (Samsung EVO Select recommended) - $15-20
 - **5mm LED** (Red/Yellow for visibility) - $0.50
 - **220Ω Resistor** (current limiting) - $0.10
 - **Jumper Wires** (Male-to-Female) - $2
@@ -1151,9 +1154,33 @@ The NEA Lightning Alert API returns real-time lightning detection data in the fo
 - **Weatherproof Enclosure** IP65 rated - $25
 - **GPIO Header Extension** (optional) - $5
 
-**Total Hardware Cost per Unit: ~$120**
+**Total Hardware Cost per Unit: ~$125-130**
 
 ### LED Alert Configuration
+
+**MicroSD Card Specifications:**
+- **Capacity**: 32GB minimum, 64GB recommended for production
+- **Speed Class**: Class 10 or UHS-I U3 (essential for reliable logging)
+- **Application Performance**: A1 or A2 rating (optimized for random I/O)
+- **Temperature Range**: -25°C to 85°C (Singapore climate compatibility)
+- **Recommended Brands**: Samsung EVO Select, SanDisk Extreme, Kingston Canvas React
+
+**Storage Requirements Analysis:**
+```
+Estimated storage usage:
+- Raspberry Pi OS Lite: ~2GB
+- Python environment + dependencies: ~1GB  
+- Application code and logs: ~500MB
+- Lightning data logging (1 year): ~2-5GB
+- System updates and buffers: ~5GB
+Total: ~10-15GB used (32GB sufficient, 64GB recommended)
+```
+
+**Why These Specifications Matter:**
+- **U3/A2 Rating**: Handles continuous lightning data logging and MQTT communications
+- **High Write Speeds**: Important for real-time strike data and system logs
+- **Wear Leveling**: Distributes writes across card to prevent early failure
+- **Error Correction**: Built-in ECC for data integrity in 24/7 operation
 
 **GPIO Pin Assignment:**
 - **GPIO 18** (Physical Pin 12) - LED Control Output
