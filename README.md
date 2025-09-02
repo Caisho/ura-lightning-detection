@@ -25,14 +25,23 @@ Professional subscription-based lightning alert system that provides real-time l
 - **Celery**: Background task processing (reports, notifications)
 - **Docker + Docker Compose**: Containerized deployment
 
-### Hardware Client (Python)
+### Hardware Client (Raspberry Pi)
+
+**Prototype Device:**
+- **Raspberry Pi 4 Model B**: Main computing unit with built-in WiFi/Ethernet
+- **LED Alert System**: External LED connected to GPIO pin for visual lightning alerts
+- **SD Card (32GB+)**: Storage for Raspberry Pi OS and client software
+- **Power Supply**: Official Raspberry Pi power adapter (5V/3A)
+- **Weatherproof Enclosure**: IP65-rated case for outdoor installation
 
 **Lightweight Client Stack:**
 - **Python 3.13**: Core runtime for Raspberry Pi devices
 - **asyncio + aiohttp**: Async networking and HTTP clients
 - **paho-mqtt**: MQTT client for server communication
-- **RPi.GPIO**: Hardware control for LEDs and displays
+- **RPi.GPIO**: Hardware control for GPIO pin and LED management
+- **gpiozero**: High-level GPIO library for simplified LED control
 - **systemd**: Service management and auto-restart
+- **Raspberry Pi OS Lite**: Minimal operating system for optimal performance
 
 ## Prerequisites
 
@@ -41,6 +50,22 @@ Professional subscription-based lightning alert system that provides real-time l
 - PostgreSQL 15+ with PostGIS extension
 - Redis 7+ for caching and queuing
 - MQTT broker (Mosquitto recommended)
+
+### Raspberry Pi Hardware Setup
+
+- **Raspberry Pi 4 Model B** (4GB RAM recommended)
+- **MicroSD Card** (32GB Class 10 or higher)
+- **LED and Resistor** (220Ω resistor for LED current limiting)
+- **Jumper Wires** for GPIO connections
+- **Breadboard** (for prototyping) or **Perfboard** (for permanent installation)
+- **Weatherproof Enclosure** (IP65 rated for outdoor use)
+
+### Raspberry Pi Software Requirements
+
+- **Raspberry Pi OS Lite** (latest version)
+- **Python 3.13** (pre-installed or via package manager)
+- **GPIO libraries**: `RPi.GPIO` and `gpiozero`
+- **Network connectivity**: WiFi or Ethernet configured
 
 ## Setup
 
@@ -74,6 +99,15 @@ Professional subscription-based lightning alert system that provides real-time l
    python scripts/init_database.py
    ```
 
+6. **Setup Raspberry Pi prototype (optional for testing):**
+   ```bash
+   # Install Raspberry Pi GPIO libraries (Linux only)
+   pip install RPi.GPIO gpiozero
+   
+   # For development on non-Raspberry Pi systems, use GPIO simulator
+   pip install gpiozero[mock]
+   ```
+
 ## Development
 
 After setup, you can:
@@ -84,6 +118,8 @@ After setup, you can:
 - **Lint code**: `ruff check`
 - **Check for dead code**: `vulture src/`
 - **Run frontend**: `npm run dev` (in `web/` directory)
+- **Test Raspberry Pi client**: `python hardware/lightning_client.py hw_test_device localhost`
+- **Simulate GPIO on development machine**: `GPIOZERO_PIN_FACTORY=mock python hardware/lightning_client.py`
 
 ## Full Stack Architecture
 
@@ -480,19 +516,30 @@ class SubscriptionService:
         return await database.fetch_all(query, values={"customer_id": customer_id})
 ```
 
-### Hardware Client Implementation
+### Hardware Client Implementation (Raspberry Pi)
 
 ```python
-# hardware/lightning_client.py - Raspberry Pi client
+# hardware/lightning_client.py - Raspberry Pi client with LED control
 import asyncio
 import json
 import logging
+import sys
 from threading import Timer
 import paho.mqtt.client as mqtt
-import RPi.GPIO as GPIO
+
+# GPIO library imports with fallback for development
+try:
+    from gpiozero import LED
+    GPIO_AVAILABLE = True
+except ImportError:
+    # Fallback for development on non-Raspberry Pi systems
+    print("GPIO libraries not available - using mock mode")
+    from unittest.mock import MagicMock
+    LED = MagicMock
+    GPIO_AVAILABLE = False
 
 class LightningAlertHardware:
-    def __init__(self, device_id: str, mqtt_broker: str):
+    def __init__(self, device_id: str, mqtt_broker: str, led_pin: int = 18):
         self.device_id = device_id
         self.mqtt_broker = mqtt_broker
         self.alert_active = False
@@ -500,14 +547,26 @@ class LightningAlertHardware:
         self.alert_timeout = 30 * 60  # 30 minutes
         
         # GPIO setup for LED control
-        self.led_pin = 18
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(self.led_pin, GPIO.OUT)
+        if GPIO_AVAILABLE:
+            self.led = LED(led_pin)
+            logging.info(f"LED initialized on GPIO pin {led_pin}")
+        else:
+            self.led = LED()  # Mock LED for development
+            logging.info("Using mock LED for development")
         
         # MQTT setup
         self.mqtt_client = mqtt.Client()
         self.mqtt_client.on_connect = self.on_mqtt_connect
         self.mqtt_client.on_message = self.on_alert_received
+        self.mqtt_client.on_disconnect = self.on_mqtt_disconnect
+        
+        # Blinking task control
+        self.blink_task = None
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
         
     async def start(self):
         """Start the hardware client"""
@@ -516,32 +575,102 @@ class LightningAlertHardware:
             self.mqtt_client.loop_forever()
         except Exception as e:
             logging.error(f"Failed to connect to MQTT broker: {e}")
+            # Retry connection after 30 seconds
+            await asyncio.sleep(30)
+            await self.start()
     
     def on_mqtt_connect(self, client, userdata, flags, rc):
         """Subscribe to device-specific alert topic"""
-        topic = f"lightning/alerts/{self.device_id}"
-        client.subscribe(topic, qos=1)
-        logging.info(f"Connected to MQTT broker, subscribed to {topic}")
+        if rc == 0:
+            topic = f"lightning/alerts/{self.device_id}"
+            client.subscribe(topic, qos=1)
+            logging.info(f"Connected to MQTT broker, subscribed to {topic}")
+            
+            # Subscribe to system commands
+            client.subscribe(f"lightning/commands/{self.device_id}", qos=1)
+            
+            # Send heartbeat to server
+            self.send_heartbeat()
+        else:
+            logging.error(f"MQTT connection failed with code {rc}")
+    
+    def on_mqtt_disconnect(self, client, userdata, rc):
+        """Handle MQTT disconnection"""
+        logging.warning(f"MQTT disconnected with code {rc}")
+        if rc != 0:
+            logging.info("Attempting to reconnect...")
     
     def on_alert_received(self, client, userdata, message):
-        """Handle incoming lightning alert"""
+        """Handle incoming lightning alert or system commands"""
         try:
-            alert_data = json.loads(message.payload.decode())
+            topic = message.topic
+            payload = json.loads(message.payload.decode())
             
-            if alert_data.get("command") == "LIGHTNING_ALERT":
-                logging.info(f"Lightning alert received: {alert_data['alert_id']}")
-                self.activate_visual_alerts()
-                self.reset_clear_timer()
+            if "alerts" in topic and payload.get("command") == "LIGHTNING_ALERT":
+                self.process_lightning_alert(payload)
+            elif "commands" in topic:
+                self.process_system_command(payload)
                 
         except Exception as e:
-            logging.error(f"Error processing alert: {e}")
+            logging.error(f"Error processing message: {e}")
+    
+    def process_lightning_alert(self, alert_data):
+        """Process incoming lightning alert"""
+        alert_id = alert_data.get('alert_id', 'unknown')
+        distance = alert_data.get('lightning_data', {}).get('distance_km', 0)
+        
+        logging.info(f"Lightning alert received: {alert_id}, distance: {distance}km")
+        
+        self.activate_visual_alerts()
+        self.reset_clear_timer()
+        
+        # Send acknowledgment back to server
+        self.send_alert_acknowledgment(alert_id)
+    
+    def process_system_command(self, command_data):
+        """Process system commands like test alerts or configuration updates"""
+        command = command_data.get("command")
+        
+        if command == "TEST_ALERT":
+            logging.info("Test alert command received")
+            self.activate_visual_alerts()
+            # Test alerts clear after 10 seconds
+            Timer(10, self.clear_test_alert).start()
+            
+        elif command == "CLEAR_ALERT":
+            logging.info("Clear alert command received")
+            self.clear_alert_immediately()
+            
+        elif command == "STATUS_REQUEST":
+            logging.info("Status request received")
+            self.send_status_report()
     
     def activate_visual_alerts(self):
-        """Turn on LED alerts"""
-        self.alert_active = True
-        # Start blinking LED at 1Hz
-        self.start_led_blinking()
+        """Turn on LED alerts with blinking pattern"""
+        if not self.alert_active:
+            self.alert_active = True
+            self.start_led_blinking()
+            logging.info("Visual alerts activated - LED blinking started")
+    
+    def start_led_blinking(self):
+        """Start LED blinking pattern at 1Hz"""
+        if self.blink_task:
+            self.blink_task.cancel()
         
+        self.blink_task = asyncio.create_task(self._blink_led())
+    
+    async def _blink_led(self):
+        """Async LED blinking coroutine"""
+        try:
+            while self.alert_active:
+                self.led.on()
+                await asyncio.sleep(0.5)
+                self.led.off()
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            self.led.off()
+            logging.info("LED blinking stopped")
+    
     def reset_clear_timer(self):
         """Reset the 30-minute auto-clear timer"""
         if self.clear_timer:
@@ -553,31 +682,173 @@ class LightningAlertHardware:
     
     def auto_clear_alert(self):
         """Automatically clear alerts after 30 minutes"""
-        self.alert_active = False
-        GPIO.output(self.led_pin, GPIO.LOW)
-        self.clear_timer = None
+        self.clear_alert_immediately()
         logging.info("Alert automatically cleared after 30 minutes")
     
-    def start_led_blinking(self):
-        """Start LED blinking pattern"""
-        async def blink():
-            while self.alert_active:
-                GPIO.output(self.led_pin, GPIO.HIGH)
-                await asyncio.sleep(0.5)
-                GPIO.output(self.led_pin, GPIO.LOW)
-                await asyncio.sleep(0.5)
+    def clear_test_alert(self):
+        """Clear test alerts after 10 seconds"""
+        if self.alert_active:
+            self.clear_alert_immediately()
+            logging.info("Test alert cleared after 10 seconds")
+    
+    def clear_alert_immediately(self):
+        """Immediately clear all alerts"""
+        self.alert_active = False
         
-        asyncio.create_task(blink())
+        if self.blink_task:
+            self.blink_task.cancel()
+            self.blink_task = None
+        
+        if self.clear_timer:
+            self.clear_timer.cancel()
+            self.clear_timer = None
+        
+        self.led.off()
+        logging.info("All alerts cleared")
+    
+    def send_heartbeat(self):
+        """Send periodic heartbeat to server"""
+        heartbeat_data = {
+            "device_id": self.device_id,
+            "timestamp": asyncio.get_event_loop().time(),
+            "status": "online",
+            "alert_active": self.alert_active,
+            "gpio_available": GPIO_AVAILABLE
+        }
+        
+        topic = f"lightning/heartbeat/{self.device_id}"
+        self.mqtt_client.publish(topic, json.dumps(heartbeat_data), qos=1)
+        
+        # Schedule next heartbeat in 5 minutes
+        Timer(300, self.send_heartbeat).start()
+    
+    def send_alert_acknowledgment(self, alert_id: str):
+        """Send acknowledgment that alert was received and processed"""
+        ack_data = {
+            "device_id": self.device_id,
+            "alert_id": alert_id,
+            "timestamp": asyncio.get_event_loop().time(),
+            "status": "acknowledged"
+        }
+        
+        topic = f"lightning/acknowledgments/{self.device_id}"
+        self.mqtt_client.publish(topic, json.dumps(ack_data), qos=1)
+    
+    def send_status_report(self):
+        """Send detailed status report to server"""
+        status_data = {
+            "device_id": self.device_id,
+            "timestamp": asyncio.get_event_loop().time(),
+            "system_status": {
+                "alert_active": self.alert_active,
+                "gpio_available": GPIO_AVAILABLE,
+                "timer_active": self.clear_timer is not None,
+                "blink_task_active": self.blink_task is not None and not self.blink_task.done()
+            }
+        }
+        
+        topic = f"lightning/status/{self.device_id}"
+        self.mqtt_client.publish(topic, json.dumps(status_data), qos=1)
 
-# Hardware startup script
+# Hardware startup script with command line configuration
 if __name__ == "__main__":
-    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python lightning_client.py <device_id> [mqtt_broker] [led_pin]")
+        print("Example: python lightning_client.py hw_garden_001 localhost 18")
+        sys.exit(1)
     
-    device_id = sys.argv[1] if len(sys.argv) > 1 else "hw_default"
+    device_id = sys.argv[1]
     mqtt_broker = sys.argv[2] if len(sys.argv) > 2 else "localhost"
+    led_pin = int(sys.argv[3]) if len(sys.argv) > 3 else 18
     
-    hardware = LightningAlertHardware(device_id, mqtt_broker)
-    asyncio.run(hardware.start())
+    if not GPIO_AVAILABLE:
+        print("Warning: Running in development mode without GPIO access")
+        print("Install RPi.GPIO and gpiozero on Raspberry Pi for full functionality")
+    
+    hardware = LightningAlertHardware(device_id, mqtt_broker, led_pin)
+    
+    try:
+        asyncio.run(hardware.start())
+    except KeyboardInterrupt:
+        logging.info("Lightning client stopped by user")
+        hardware.clear_alert_immediately()
+    except Exception as e:
+        logging.error(f"Lightning client error: {e}")
+```
+
+### Raspberry Pi Hardware Wiring
+
+```
+Raspberry Pi GPIO Wiring for LED Alert:
+
+GPIO Pin 18 (Physical Pin 12) ──── 220Ω Resistor ──── LED Anode (+)
+                                                       |
+Ground (Physical Pin 6) ─────────────────────────── LED Cathode (-)
+
+Alternative GPIO pins: 2, 3, 4, 17, 27, 22, 10, 9, 11, 5, 6, 13, 19, 26
+```
+
+### Raspberry Pi Installation Script
+
+```bash
+#!/bin/bash
+# install_raspberry_pi.sh - Automated setup for Raspberry Pi lightning client
+
+echo "Lightning Alert System - Raspberry Pi Setup"
+echo "==========================================="
+
+# Update system packages
+sudo apt update && sudo apt upgrade -y
+
+# Install Python 3.13 and development tools
+sudo apt install -y python3.13 python3.13-venv python3.13-dev python3-pip
+
+# Install GPIO libraries
+sudo apt install -y python3-rpi.gpio python3-gpiozero
+
+# Create application directory
+sudo mkdir -p /opt/lightning-alert
+sudo chown pi:pi /opt/lightning-alert
+cd /opt/lightning-alert
+
+# Download client software
+wget https://github.com/Caisho/ura-lightning-detection/releases/latest/download/raspberry-pi-client.tar.gz
+tar -xzf raspberry-pi-client.tar.gz
+
+# Create virtual environment
+python3.13 -m venv venv
+source venv/bin/activate
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Create systemd service
+sudo tee /etc/systemd/system/lightning-alert.service > /dev/null <<EOF
+[Unit]
+Description=Lightning Alert Hardware Client
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/lightning-alert
+Environment=PATH=/opt/lightning-alert/venv/bin
+ExecStart=/opt/lightning-alert/venv/bin/python hardware/lightning_client.py DEVICE_ID_HERE mqtt.yourdomain.com
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start service
+sudo systemctl daemon-reload
+sudo systemctl enable lightning-alert.service
+
+echo "Setup complete! Configure your device ID and MQTT broker, then start with:"
+echo "sudo systemctl start lightning-alert.service"
 ```
 
 ### Web Dashboard (Vue.js)
@@ -752,6 +1023,16 @@ services:
     depends_on:
       - lightning-server
 
+  # Optional: Raspberry Pi simulator for testing without hardware
+  pi-simulator:
+    build: ./hardware
+    environment:
+      DEVICE_ID: "sim_test_device"
+      MQTT_BROKER: mosquitto
+      GPIO_MOCK: "true"
+    depends_on:
+      - mosquitto
+
 volumes:
   postgres_data:
 ```
@@ -759,10 +1040,12 @@ volumes:
 ## Performance & Scalability
 
 ### System Capacity
-- **Target Scale**: 10,000+ concurrent hardware devices
+- **Target Scale**: 10,000+ concurrent Raspberry Pi devices
 - **API Efficiency**: Single NEA API subscription serves all customers
 - **Geographic Optimization**: PostGIS spatial indexing for sub-second queries
-- **Alert Latency**: <10 seconds from strike detection to hardware activation
+- **Alert Latency**: <10 seconds from strike detection to LED activation
+- **Hardware Reliability**: Autonomous operation with automatic alert clearing
+- **Network Resilience**: MQTT with QoS 1 for guaranteed alert delivery
 
 ### Monitoring & Analytics
 - **Real-time Dashboards**: System health, alert patterns, device status
@@ -779,9 +1062,11 @@ volumes:
 
 ### Competitive Advantages
 - **Professional Reliability**: Redundant cloud infrastructure
-- **Rapid Deployment**: Pre-configured hardware with instant activation
+- **Rapid Deployment**: Pre-configured Raspberry Pi devices with instant activation
 - **Continuous Improvement**: Over-the-air updates and new features
 - **Enterprise Ready**: Multi-location support and API integrations
+- **Cost-Effective Hardware**: Raspberry Pi platform reduces device costs by 70%
+- **Easy Installation**: Simple GPIO wiring and plug-and-play setup
 
 ## API Output Template
 
@@ -851,6 +1136,254 @@ The NEA Lightning Alert API returns real-time lightning detection data in the fo
   - **item.type**: Data type ("observation")
   - **updatedTimestamp**: Last update time of the record
 - **errorMsg**: Error message (empty string when successful)
+
+## Raspberry Pi Prototype Development
+
+### Hardware Components
+
+**Required Components:**
+- **Raspberry Pi 4 Model B** (4GB RAM) - $75
+- **MicroSD Card** 32GB Class 10 - $12
+- **5mm LED** (Red/Yellow for visibility) - $0.50
+- **220Ω Resistor** (current limiting) - $0.10
+- **Jumper Wires** (Male-to-Female) - $2
+- **Breadboard** (for prototyping) - $3
+- **Weatherproof Enclosure** IP65 rated - $25
+- **GPIO Header Extension** (optional) - $5
+
+**Total Hardware Cost per Unit: ~$120**
+
+### LED Alert Configuration
+
+**GPIO Pin Assignment:**
+- **GPIO 18** (Physical Pin 12) - LED Control Output
+- **Ground** (Physical Pin 6) - LED Return Path
+- **Alternative Pins**: GPIO 2, 3, 4, 17, 27, 22 for multiple LEDs
+
+**Wiring Diagram:**
+```
+Raspberry Pi 4 GPIO Layout:
+┌─────────────────────────────────┐
+│  3V3  (1) ◯ ◯ (2)  5V          │
+│  GPIO2 (3) ◯ ◯ (4)  5V          │
+│  GPIO3 (5) ◯ ◯ (6)  GND  ───┐   │
+│  GPIO4 (7) ◯ ◯ (8)  GPIO14     │   │
+│  GND   (9) ◯ ◯ (10) GPIO15     │   │
+│ GPIO17(11) ◯ ◯ (12) GPIO18 ──┐ │   │
+│ GPIO27(13) ◯ ◯ (14) GND       │ │   │
+│ GPIO22(15) ◯ ◯ (16) GPIO23    │ │   │
+│  3V3  (17) ◯ ◯ (18) GPIO24    │ │   │
+│ GPIO10(19) ◯ ◯ (20) GND       │ │   │
+└─────────────────────────────────┘ │   │
+                                    │   │
+                   GPIO18 ──────────┘   │
+                       │                │
+                   220Ω Resistor        │
+                       │                │
+                   LED Anode (+)        │
+                       │                │
+                   LED Cathode (-) ─────┘
+                   (Connected to Ground)
+```
+
+### Software Development Framework
+
+**Development Environment Setup:**
+```bash
+# Install development dependencies
+sudo apt update
+sudo apt install -y python3.13-dev python3-venv git
+
+# Clone repository
+git clone https://github.com/Caisho/ura-lightning-detection.git
+cd ura-lightning-detection
+
+# Setup virtual environment
+python3.13 -m venv venv
+source venv/bin/activate
+
+# Install Raspberry Pi specific dependencies
+pip install -r requirements-raspberry-pi.txt
+```
+
+**requirements-raspberry-pi.txt:**
+```
+# Core dependencies
+asyncio-mqtt>=0.16.1
+paho-mqtt>=1.6.1
+aiohttp>=3.9.0
+
+# Raspberry Pi GPIO libraries
+RPi.GPIO>=0.7.1
+gpiozero>=1.6.2
+
+# Development and testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+mock>=4.0.3
+
+# Optional: GPIO simulation for development
+fake-rpi>=0.7.1
+```
+
+### Development Workflow
+
+**1. Local Development (Non-Raspberry Pi):**
+```bash
+# Use GPIO simulation for development on PC/Mac
+export GPIOZERO_PIN_FACTORY=mock
+python hardware/lightning_client.py test_device localhost
+
+# Run unit tests with GPIO mocking
+pytest tests/hardware/ -v
+```
+
+**2. Raspberry Pi Testing:**
+```bash
+# Deploy to Raspberry Pi
+scp -r hardware/ pi@raspberrypi.local:/home/pi/lightning-alert/
+
+# SSH into Raspberry Pi
+ssh pi@raspberrypi.local
+
+# Run client directly
+cd lightning-alert
+python hardware/lightning_client.py pi_garden_001 your-mqtt-broker.com
+
+# Install as system service
+sudo systemctl enable lightning-alert.service
+sudo systemctl start lightning-alert.service
+```
+
+**3. Hardware Testing Commands:**
+```bash
+# Test LED manually
+python -c "from gpiozero import LED; led = LED(18); led.blink()"
+
+# Test MQTT connection
+mosquitto_sub -h your-mqtt-broker.com -t "lightning/alerts/+"
+
+# Send test alert
+mosquitto_pub -h your-mqtt-broker.com -t "lightning/alerts/test_device" \
+  -m '{"command":"TEST_ALERT","timestamp":"2025-09-02T11:35:37+08:00"}'
+```
+
+### Production Deployment
+
+**Raspberry Pi Image Preparation:**
+```bash
+#!/bin/bash
+# prepare_production_image.sh
+
+# Base Raspberry Pi OS Lite setup
+sudo apt update && sudo apt upgrade -y
+
+# Install required packages
+sudo apt install -y python3.13 python3-pip git mosquitto-clients
+
+# Create application user
+sudo useradd -m -s /bin/bash lightning
+sudo usermod -a -G gpio,spi,i2c lightning
+
+# Install application
+sudo -u lightning git clone https://github.com/Caisho/ura-lightning-detection.git /home/lightning/app
+cd /home/lightning/app
+sudo -u lightning python3.13 -m venv venv
+sudo -u lightning ./venv/bin/pip install -r requirements-raspberry-pi.txt
+
+# Configure systemd service
+sudo cp config/lightning-alert.service /etc/systemd/system/
+sudo systemctl enable lightning-alert.service
+
+# Network configuration
+sudo cp config/wpa_supplicant.conf.template /etc/wpa_supplicant/
+sudo cp config/dhcpcd.conf.template /etc/
+
+echo "Production image prepared. Configure WiFi and device ID before shipping."
+```
+
+### Customer Setup Process
+
+**1. WiFi Configuration:**
+```bash
+# Customer configures WiFi via web interface at http://raspberrypi.local
+# Or via mobile app with QR code setup
+
+# Alternative: Pre-configuration file
+cat > /boot/wpa_supplicant.conf << EOF
+country=SG
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+
+network={
+    ssid="CustomerWiFiNetwork"
+    psk="CustomerPassword"
+}
+EOF
+```
+
+**2. Device Registration:**
+```bash
+# Automatic registration on first boot
+curl -X POST https://api.yourdomain.com/v1/hardware/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "pi_'$(cat /proc/cpuinfo | grep Serial | cut -d: -f2)'",
+    "device_type": "raspberry_pi_4",
+    "activation_code": "'$ACTIVATION_CODE'",
+    "location": {
+      "latitude": '$GPS_LAT',
+      "longitude": '$GPS_LON'
+    }
+  }'
+```
+
+### Monitoring and Maintenance
+
+**Remote Monitoring Dashboard:**
+- Device online/offline status
+- Last heartbeat timestamp
+- Alert response times
+- LED functionality status
+- Network connectivity health
+
+**Over-the-Air Updates:**
+```python
+# update_manager.py - Remote update capability
+import subprocess
+import logging
+from pathlib import Path
+
+async def check_for_updates():
+    """Check for software updates from server"""
+    current_version = get_current_version()
+    latest_version = await fetch_latest_version()
+    
+    if latest_version > current_version:
+        await download_and_apply_update(latest_version)
+        restart_service()
+
+def get_current_version():
+    return Path("/home/lightning/app/VERSION").read_text().strip()
+
+async def download_and_apply_update(version):
+    """Download and apply software update"""
+    subprocess.run([
+        "git", "fetch", "origin", f"v{version}"
+    ], cwd="/home/lightning/app")
+    
+    subprocess.run([
+        "git", "checkout", f"v{version}"
+    ], cwd="/home/lightning/app")
+    
+    subprocess.run([
+        "./venv/bin/pip", "install", "-r", "requirements-raspberry-pi.txt"
+    ], cwd="/home/lightning/app")
+
+def restart_service():
+    """Restart the lightning alert service"""
+    subprocess.run(["sudo", "systemctl", "restart", "lightning-alert.service"])
+```
 
 ## Hardware Lightning Alert System Guidelines
 
@@ -1237,18 +1770,19 @@ class LightningAlertHardware:
 ### Hardware Registration Process
 
 1. **Customer Account Creation**: Web portal registration with location verification
-2. **Hardware Provisioning**: Device shipped with unique ID and activation code
-3. **Location Setup**: Customer provides precise GPS coordinates via mobile app
-4. **Network Configuration**: Hardware connects to customer WiFi and server
-5. **Service Activation**: Server adds hardware to customer database and begins monitoring
+2. **Raspberry Pi Provisioning**: Device shipped pre-configured with unique ID and activation code
+3. **Location Setup**: Customer provides precise GPS coordinates via mobile app or web portal
+4. **Network Configuration**: Raspberry Pi connects to customer WiFi using setup wizard
+5. **LED Installation**: Simple GPIO wiring to external LED for visual alerts
+6. **Service Activation**: Server adds hardware to customer database and begins monitoring
 
 ### Multi-Location Support
 
 **Premium/Commercial Features**:
-- Multiple hardware units per customer account
+- Multiple Raspberry Pi units per customer account
 - Different alert radius per location (home: 8km, office: 5km, warehouse: 12km)
 - Location-specific notification preferences
-- Centralized management dashboard
+- Centralized management dashboard for all devices
 
 ### Customer Portal Features
 
