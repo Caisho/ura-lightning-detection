@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   lightning-webapp:
-    build: .
+    image: caisho/lightning-detection:latest
     container_name: singapore-lightning-detection
     ports:
       - "8000:8000"
