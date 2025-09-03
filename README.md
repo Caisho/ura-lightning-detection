@@ -2,6 +2,37 @@
 
 Professional subscription-based lightning alert system that provides real-time lightning detection for homes and businesses in Singapore. The system uses a centralized server that monitors NEA (National Environment Agency) Lightning Alert API and pushes alerts to subscriber hardware units when lightning is detected within their specified radius.
 
+## 🆕 Web Application
+
+**NEW**: Interactive web application for real-time lightning monitoring!
+
+### Lightning Detection Web App
+
+A modern web interface that displays Singapore lightning strikes on an interactive map with real-time refresh functionality.
+
+![Lightning Web App](https://github.com/user-attachments/assets/b804995f-9ca5-4812-b503-88ea3dfb113c)
+
+**Features:**
+- 🌩️ Real-time lightning strike monitoring
+- 🗺️ Interactive Singapore map with detailed markers
+- 🔄 Manual and automatic refresh (every 5 minutes)
+- 📱 Responsive design for desktop and mobile
+- 🐳 Docker deployment ready
+- 📊 Live statistics dashboard
+
+**Quick Start:**
+```bash
+# Start the web application
+python run.py
+
+# Or with Docker
+docker-compose up -d
+
+# Access at http://localhost:8000
+```
+
+See [WEBAPP_README.md](WEBAPP_README.md) and [DEPLOYMENT.md](DEPLOYMENT.md) for complete documentation.
+
 ## Technology Stack
 
 ### Server Architecture (Python Full Stack)

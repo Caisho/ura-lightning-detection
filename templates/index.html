@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Singapore Lightning Detection</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            color: white;
+            padding: 20px 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .stats-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-left: 4px solid #2a5298;
+        }
+        
+        .map-container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            min-height: 600px;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-success { background-color: #28a745; }
+        .status-error { background-color: #dc3545; }
+        .status-warning { background-color: #ffc107; }
+        
+        .refresh-btn {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            border: none;
+            border-radius: 25px;
+            padding: 12px 30px;
+            color: white;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+        
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+            color: white;
+        }
+        
+        .refresh-btn:disabled {
+            background: #6c757d;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .loading-spinner {
+            display: none;
+        }
+        
+        .alert-info {
+            border-left: 4px solid #17a2b8;
+            background-color: #d1ecf1;
+        }
+        
+        .alert-success {
+            border-left: 4px solid #28a745;
+            background-color: #d4edda;
+        }
+        
+        .alert-warning {
+            border-left: 4px solid #ffc107;
+            background-color: #fff3cd;
+        }
+        
+        .footer {
+            background-color: #343a40;
+            color: #adb5bd;
+            padding: 20px 0;
+            margin-top: 40px;
+        }
+        
+        #map-content iframe, #map-content {
+            width: 100%;
+            min-height: 500px;
+            border: none;
+            border-radius: 8px;
+        }
+        
+        .feature-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .feature-list li {
+            padding: 8px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .feature-list li:last-child {
+            border-bottom: none;
+        }
+        
+        .feature-list i {
+            color: #28a745;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-md-8">
+                    <h1 class="mb-0">
+                        <i class="fas fa-bolt me-3"></i>Singapore Lightning Detection
+                    </h1>
+                    <p class="mb-0 mt-2">Real-time lightning strike monitoring powered by NEA API</p>
+                </div>
+                <div class="col-md-4 text-end">
+                    <button id="refresh-btn" class="btn refresh-btn">
+                        <i class="fas fa-sync-alt me-2"></i>Refresh Data
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mt-4">
+        <!-- Status and Stats Row -->
+        <div class="row">
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <h5><i class="fas fa-bolt text-warning me-2"></i>Lightning Strikes</h5>
+                    <h2 class="text-primary mb-0" id="strike-count">{{ lightning_data.total_strikes or 0 }}</h2>
+                    <small class="text-muted">Total detected</small>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <h5><i class="fas fa-clock text-info me-2"></i>Last Update</h5>
+                    <p class="mb-0" id="last-update">{{ last_update or 'Never' }}</p>
+                    <small class="text-muted">Singapore time</small>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <h5><i class="fas fa-wifi text-success me-2"></i>API Status</h5>
+                    <p class="mb-0">
+                        <span class="status-indicator {% if lightning_data.success %}status-success{% else %}status-error{% endif %}"></span>
+                        <span id="api-status">{% if lightning_data.success %}Connected{% else %}Error{% endif %}</span>
+                    </p>
+                    <small class="text-muted">NEA Lightning API</small>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <h5><i class="fas fa-database text-secondary me-2"></i>Records</h5>
+                    <h2 class="text-secondary mb-0" id="records-count">{{ lightning_data.raw_records_count or 0 }}</h2>
+                    <small class="text-muted">Time periods</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Messages -->
+        <div id="status-messages">
+            {% if error %}
+            <div class="alert alert-danger" role="alert">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <strong>Error:</strong> {{ error }}
+            </div>
+            {% elif lightning_data.success and lightning_data.total_strikes == 0 %}
+            <div class="alert alert-info" role="alert">
+                <i class="fas fa-info-circle me-2"></i>
+                <strong>No Lightning Activity:</strong> No lightning strikes detected in the current observation period. This is normal when weather conditions are clear.
+            </div>
+            {% elif lightning_data.success and lightning_data.total_strikes > 0 %}
+            <div class="alert alert-warning" role="alert">
+                <i class="fas fa-bolt me-2"></i>
+                <strong>Lightning Detected:</strong> {{ lightning_data.total_strikes }} lightning strikes found in {{ lightning_data.records_with_lightning or 0 }} time periods.
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Main Content Row -->
+        <div class="row">
+            <!-- Map -->
+            <div class="col-md-9">
+                <div class="map-container">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h4><i class="fas fa-map me-2"></i>Lightning Strike Map</h4>
+                        <div class="loading-spinner">
+                            <div class="spinner-border spinner-border-sm text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="map-content">
+                        {{ map_html | safe }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Side Panel -->
+            <div class="col-md-3">
+                <!-- Instructions -->
+                <div class="stats-card">
+                    <h5><i class="fas fa-question-circle me-2"></i>How to Use</h5>
+                    <ul class="feature-list">
+                        <li><i class="fas fa-sync-alt"></i>Click "Refresh Data" to update lightning information</li>
+                        <li><i class="fas fa-map-marker-alt"></i>Red markers show ground strikes</li>
+                        <li><i class="fas fa-cloud"></i>Orange markers show cloud-to-cloud strikes</li>
+                        <li><i class="fas fa-mouse-pointer"></i>Click markers for detailed information</li>
+                        <li><i class="fas fa-expand"></i>Zoom and pan the map to explore</li>
+                    </ul>
+                </div>
+
+                <!-- Legend -->
+                <div class="stats-card">
+                    <h5><i class="fas fa-info-circle me-2"></i>Legend</h5>
+                    <div class="mb-2">
+                        <span style="color: red;"><i class="fas fa-map-marker-alt"></i></span>
+                        <small class="ms-2">Ground Lightning (Type G)</small>
+                    </div>
+                    <div class="mb-2">
+                        <span style="color: orange;"><i class="fas fa-map-marker-alt"></i></span>
+                        <small class="ms-2">Cloud-to-Cloud Lightning (Type C)</small>
+                    </div>
+                    <div class="mb-2">
+                        <span style="color: green;"><i class="fas fa-home"></i></span>
+                        <small class="ms-2">Singapore Center</small>
+                    </div>
+                    <div>
+                        <span style="color: blue;"><i class="fas fa-square"></i></span>
+                        <small class="ms-2">Singapore Boundary</small>
+                    </div>
+                </div>
+
+                <!-- API Information -->
+                <div class="stats-card">
+                    <h5><i class="fas fa-cog me-2"></i>Data Source</h5>
+                    <p class="small">
+                        Lightning data is provided by Singapore's National Environment Agency (NEA) 
+                        through their real-time weather API.
+                    </p>
+                    <p class="small mb-0">
+                        <strong>API Endpoint:</strong><br>
+                        <code class="small">api-open.data.gov.sg</code>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <div class="container">
+            <div class="row">
+                <div class="col-md-6">
+                    <p class="mb-0">&copy; 2025 Singapore Lightning Detection System</p>
+                </div>
+                <div class="col-md-6 text-end">
+                    <p class="mb-0">
+                        <a href="/api/lightning" class="text-light me-3">API</a>
+                        <a href="/health" class="text-light">Health Check</a>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Refresh functionality
+        document.getElementById('refresh-btn').addEventListener('click', async function() {
+            const btn = this;
+            const loadingSpinner = document.querySelector('.loading-spinner');
+            const statusMessages = document.getElementById('status-messages');
+            
+            // Disable button and show loading
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Refreshing...';
+            loadingSpinner.style.display = 'block';
+            
+            try {
+                const response = await fetch('/api/refresh');
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Update statistics
+                    document.getElementById('strike-count').textContent = data.lightning_data.total_strikes || 0;
+                    document.getElementById('last-update').textContent = data.last_update || 'Never';
+                    document.getElementById('records-count').textContent = data.lightning_data.raw_records_count || 0;
+                    
+                    // Update API status
+                    const statusIndicator = document.querySelector('.status-indicator');
+                    const statusText = document.getElementById('api-status');
+                    if (data.lightning_data.success) {
+                        statusIndicator.className = 'status-indicator status-success';
+                        statusText.textContent = 'Connected';
+                    } else {
+                        statusIndicator.className = 'status-indicator status-error';
+                        statusText.textContent = 'Error';
+                    }
+                    
+                    // Update map
+                    if (data.map_html) {
+                        document.getElementById('map-content').innerHTML = data.map_html;
+                    }
+                    
+                    // Update status messages
+                    let alertClass, alertIcon, alertMessage;
+                    
+                    if (data.lightning_data.total_strikes === 0) {
+                        alertClass = 'alert-info';
+                        alertIcon = 'fa-info-circle';
+                        alertMessage = '<strong>No Lightning Activity:</strong> No lightning strikes detected in the current observation period. This is normal when weather conditions are clear.';
+                    } else {
+                        alertClass = 'alert-warning';
+                        alertIcon = 'fa-bolt';
+                        alertMessage = `<strong>Lightning Detected:</strong> ${data.lightning_data.total_strikes} lightning strikes found in ${data.lightning_data.records_with_lightning || 0} time periods.`;
+                    }
+                    
+                    statusMessages.innerHTML = `
+                        <div class="alert ${alertClass}" role="alert">
+                            <i class="fas ${alertIcon} me-2"></i>
+                            ${alertMessage}
+                        </div>
+                    `;
+                    
+                } else {
+                    // Show error message
+                    statusMessages.innerHTML = `
+                        <div class="alert alert-danger" role="alert">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            <strong>Refresh Failed:</strong> ${data.error || 'Unknown error occurred'}
+                        </div>
+                    `;
+                }
+                
+            } catch (error) {
+                console.error('Refresh error:', error);
+                statusMessages.innerHTML = `
+                    <div class="alert alert-danger" role="alert">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>Network Error:</strong> Failed to refresh data. Please check your connection.
+                    </div>
+                `;
+            } finally {
+                // Re-enable button and hide loading
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-sync-alt me-2"></i>Refresh Data';
+                loadingSpinner.style.display = 'none';
+            }
+        });
+        
+        // Auto-refresh every 5 minutes
+        setInterval(function() {
+            document.getElementById('refresh-btn').click();
+        }, 5 * 60 * 1000);
+        
+        // Update last update time display
+        function updateTimeDisplay() {
+            const lastUpdateElement = document.getElementById('last-update');
+            const lastUpdateText = lastUpdateElement.textContent;
+            
+            if (lastUpdateText && lastUpdateText !== 'Never') {
+                try {
+                    const updateTime = new Date(lastUpdateText);
+                    const now = new Date();
+                    const diffMinutes = Math.floor((now - updateTime) / (1000 * 60));
+                    
+                    if (diffMinutes < 1) {
+                        lastUpdateElement.textContent = 'Just now';
+                    } else if (diffMinutes < 60) {
+                        lastUpdateElement.textContent = `${diffMinutes} minute${diffMinutes > 1 ? 's' : ''} ago`;
+                    } else {
+                        lastUpdateElement.textContent = updateTime.toLocaleString();
+                    }
+                } catch (e) {
+                    // Keep original text if parsing fails
+                }
+            }
+        }
+        
+        // Update time display every minute
+        setInterval(updateTimeDisplay, 60000);
+        updateTimeDisplay();
+    </script>
+</body>
+</html>
