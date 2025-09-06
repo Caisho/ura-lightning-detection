@@ -1901,6 +1901,333 @@ Invalid HTTP request body.
 #### 404 Not Found
 Weather data not found.
 
+## Raspberry Pi Development & Simulation
+
+### Hardware Simulation Options
+
+Several excellent options are available to simulate Raspberry Pi hardware and its functionality on a computer without needing a physical Pi. These tools are perfect for developing, testing, and learning. They generally fall into two categories: hardware emulators that run the full Raspberry Pi operating system, and electronics simulators that focus on GPIO pin interaction.
+
+### Hardware Emulators: Running the Full OS
+
+Hardware emulators create a complete virtual Raspberry Pi inside your PC (Windows, macOS, or Linux). They simulate the ARM processor and other core components, allowing you to boot and run the official Raspberry Pi OS.
+
+#### QEMU (Quick EMUlator)
+
+QEMU is the most powerful and popular tool for this. It's a free, open-source machine emulator that can mimic the Raspberry Pi's ARM architecture on your x86-based computer.
+
+**What it Simulates:** The CPU, memory, and basic peripherals. You can install and run the full Raspberry Pi OS, develop software, and test scripts in an environment that is nearly identical to a real Pi.
+
+**Best For:** Software development, testing operating system configurations, and learning Linux in the Raspberry Pi environment.
+
+**Limitation:** While it simulates the core hardware, directly interacting with physical electronics (like GPIO pins) is complex and not its primary strength.
+
+**Setup Example:**
+```bash
+# Download Raspberry Pi OS image
+curl -L https://downloads.raspberrypi.org/raspios_lite_armhf/images/raspios_lite_armhf-2024-07-04/2024-07-04-raspios-bookworm-armhf-lite.img.xz -o raspios-lite.img.xz
+
+# Extract the image
+xz -d raspios-lite.img.xz
+
+# Run with QEMU (ARM emulation)
+qemu-system-arm \
+  -machine versatilepb \
+  -cpu arm1176 \
+  -m 512 \
+  -hda raspios-lite.img \
+  -netdev user,id=net0,hostfwd=tcp::5022-:22 \
+  -device rtl8139,netdev=net0 \
+  -append "root=/dev/sda2 panic=1" \
+  -kernel kernel-qemu \
+  -dtb versatile-pb-buster.dtb \
+  -no-reboot \
+  -serial stdio
+```
+
+#### UTM (macOS/iOS)
+
+For Mac users, UTM provides a user-friendly interface built on top of QEMU.
+
+**Features:**
+- Native Apple Silicon support
+- Pre-configured Raspberry Pi templates
+- Drag-and-drop VM creation
+- Integration with macOS file sharing
+
+**Installation:**
+```bash
+# Install via Homebrew
+brew install --cask utm
+
+# Or download from Mac App Store
+# Search for "UTM Virtual Machines"
+```
+
+### GPIO Simulation for Development
+
+For lightning detection system development, GPIO simulation is crucial for testing LED alerts and hardware interactions without physical Raspberry Pi hardware.
+
+#### GPIO Zero with Mock Factory
+
+The `gpiozero` library includes a built-in mock system perfect for development.
+
+**Setup for Lightning Client Development:**
+```bash
+# Install development dependencies
+pip install gpiozero fake-rpi
+
+# Set mock GPIO factory environment variable
+export GPIOZERO_PIN_FACTORY=mock
+
+# Run lightning client with GPIO simulation
+python hardware/lightning_client.py test_device localhost
+```
+
+**Mock GPIO Example:**
+```python
+# GPIO simulation for lightning alert testing
+import os
+os.environ['GPIOZERO_PIN_FACTORY'] = 'mock'
+
+from gpiozero import LED
+from gpiozero.pins.mock import MockFactory
+from time import sleep
+
+# Create mock LED for testing
+led = LED(18)
+pin = MockFactory.pin(18)
+
+# Test LED blinking pattern
+for i in range(10):
+    led.on()
+    print(f"LED State: {pin.state}")  # Outputs: 1 (on)
+    sleep(0.5)
+    led.off()
+    print(f"LED State: {pin.state}")  # Outputs: 0 (off)
+    sleep(0.5)
+```
+
+#### GPIO Simulator Web Interface
+
+For visual GPIO testing, use the `gpiosim` web interface.
+
+**Installation:**
+```bash
+# Install GPIO simulator
+pip install gpiosim
+
+# Start web interface
+gpiosim --web --port 8080
+
+# Access at http://localhost:8080
+# Visual GPIO pin status and control
+```
+
+### Electronics Circuit Simulation
+
+For comprehensive circuit design and testing, including LED resistor calculations and GPIO interactions.
+
+#### Wokwi Arduino/Raspberry Pi Simulator
+
+Wokwi provides an online simulator that supports Raspberry Pi with visual components.
+
+**Features:**
+- Visual breadboard with LEDs, resistors, sensors
+- Real-time GPIO pin monitoring
+- Code editor with Python support
+- Lightning detection circuit prototyping
+
+**Example Lightning Alert Circuit:**
+```python
+# Wokwi Raspberry Pi lightning alert simulation
+import asyncio
+from machine import Pin
+import time
+
+# GPIO 18 for LED control
+led = Pin(18, Pin.OUT)
+
+async def lightning_alert_simulation():
+    """Simulate lightning alert with LED blinking"""
+    print("Lightning detected! Activating LED alerts...")
+    
+    # Blink LED for 30 seconds (simulated 30-minute alert)
+    for _ in range(30):  # 30 blinks = 30 minutes simulation
+        led.on()
+        await asyncio.sleep(0.5)
+        led.off()
+        await asyncio.sleep(0.5)
+    
+    print("Alert cleared automatically")
+
+# Run simulation
+asyncio.run(lightning_alert_simulation())
+```
+
+### Development Workflow with Simulation
+
+#### Local Development Setup
+
+**1. Install Development Environment:**
+```bash
+# Clone the lightning detection repository
+git clone https://github.com/Caisho/ura-lightning-detection.git
+cd ura-lightning-detection
+
+# Create virtual environment with simulation support
+uv venv --python 3.13
+source .venv/bin/activate
+
+# Install with development dependencies including simulation
+uv sync --extra dev --extra simulation
+```
+
+**2. Mock GPIO Configuration:**
+```bash
+# Create development configuration
+cat > .env.development << EOF
+GPIOZERO_PIN_FACTORY=mock
+MQTT_BROKER=localhost
+DEVICE_ID=sim_dev_001
+GPIO_LED_PIN=18
+DEVELOPMENT_MODE=true
+EOF
+
+# Load environment and run simulation
+source .env.development
+python hardware/lightning_client.py sim_dev_001 localhost
+```
+
+**3. Integration Testing:**
+```bash
+# Start local MQTT broker for testing
+docker run -p 1883:1883 eclipse-mosquitto:2
+
+# Run lightning server in simulation mode
+SIMULATION_MODE=true python src/lightning_service.py
+
+# Test alert delivery to simulated hardware
+python tests/integration/test_alert_simulation.py
+```
+
+#### Testing Alert Scenarios
+
+**Simulate Different Lightning Distances:**
+```python
+# Test different alert scenarios
+import json
+import paho.mqtt.client as mqtt
+
+def send_test_alert(device_id, distance_km):
+    """Send simulated lightning alert to test hardware response"""
+    
+    alert_message = {
+        "command": "LIGHTNING_ALERT",
+        "alert_id": f"test_{int(time.time())}",
+        "timestamp": datetime.now().isoformat(),
+        "lightning_data": {
+            "distance_km": distance_km,
+            "strike_time": datetime.now().isoformat(),
+            "strike_location": {
+                "latitude": 1.3521,
+                "longitude": 103.8198
+            }
+        },
+        "alert_level": "HIGH" if distance_km < 5 else "MEDIUM"
+    }
+    
+    client = mqtt.Client()
+    client.connect("localhost", 1883, 60)
+    client.publish(f"lightning/alerts/{device_id}", json.dumps(alert_message))
+    client.disconnect()
+
+# Test scenarios
+send_test_alert("sim_dev_001", 2.5)  # Close lightning - high priority
+send_test_alert("sim_dev_001", 7.8)  # Distant lightning - medium priority
+```
+
+### Continuous Integration with Simulation
+
+**GitHub Actions Workflow:**
+```yaml
+# .github/workflows/raspberry-pi-simulation.yml
+name: Raspberry Pi Hardware Simulation Tests
+
+on: [push, pull_request]
+
+jobs:
+  simulate-hardware:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.13'
+    
+    - name: Install dependencies with simulation support
+      run: |
+        pip install -r requirements.txt
+        pip install fake-rpi gpiozero pytest-asyncio
+    
+    - name: Run GPIO simulation tests
+      env:
+        GPIOZERO_PIN_FACTORY: mock
+      run: |
+        pytest tests/hardware/test_gpio_simulation.py -v
+    
+    - name: Test MQTT communication simulation
+      run: |
+        docker run -d -p 1883:1883 eclipse-mosquitto:2
+        sleep 5
+        python tests/integration/test_mqtt_simulation.py
+    
+    - name: Validate alert timing simulation
+      run: |
+        python tests/simulation/test_alert_timing.py
+```
+
+### Production Deployment Validation
+
+Before deploying to physical Raspberry Pi hardware, use simulation to validate:
+
+**1. Alert Response Times:**
+```python
+# Validate alert delivery performance
+async def test_alert_performance():
+    start_time = time.time()
+    
+    # Simulate lightning strike processing
+    await process_lightning_strike(mock_strike_data)
+    
+    # Measure time to hardware activation
+    activation_time = time.time() - start_time
+    
+    assert activation_time < 10.0, f"Alert took {activation_time}s (target: <10s)"
+```
+
+**2. Network Resilience:**
+```python
+# Test network interruption scenarios
+async def test_network_resilience():
+    # Simulate network disconnection
+    mqtt_client.disconnect()
+    
+    # Verify hardware continues autonomous operation
+    assert hardware.alert_active == True
+    
+    # Simulate reconnection after 5 minutes
+    await asyncio.sleep(300)
+    mqtt_client.reconnect()
+    
+    # Verify hardware synchronizes with server
+    assert hardware.last_heartbeat < 60  # Recent heartbeat
+```
+
+This simulation framework enables complete development and testing of the lightning detection system without requiring physical Raspberry Pi hardware, significantly reducing development costs and iteration time.
+
 ## Usage
 
 [Add usage instructions here]
