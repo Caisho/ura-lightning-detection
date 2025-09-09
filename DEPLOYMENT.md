@@ -158,170 +158,155 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 
 ### Private Registry (Synology)
 
-```bash
-# Tag for private registry
-docker tag lightning-detection:latest your-synology:5000/lightning-detection:latest
+#### Configure Local Registry Access
 
-# Push to Synology registry
-docker push your-synology:5000/lightning-detection:latest
+First, configure Docker to work with the insecure registry on your Synology NAS:
+
+**For Docker on Linux/macOS:**
+```bash
+# Edit or create Docker daemon configuration
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json <<EOF
+{
+  "insecure-registries": ["192.168.31.112:9500"]
+}
+EOF
+
+# Restart Docker service
+sudo systemctl restart docker
 ```
 
-## Configuration
-
-### API Settings
-
-The application fetches data from Singapore's NEA Lightning API:
-- **Endpoint**: `https://api-open.data.gov.sg/v2/real-time/api/weather`
-- **Parameter**: `api=lightning`
-- **Rate Limit**: No API key required for basic usage
-- **Update Frequency**: Manual refresh + auto-refresh every 5 minutes
-
-### Port Configuration
-
-- **Default Application Port**: `8000`
-- **Nginx Port** (production): `80`
-- **Health Check Endpoint**: `/health`
-- **API Endpoints**: `/api/lightning`, `/api/refresh`, `/api/status`
-
-## Monitoring and Maintenance
-
-### Health Checks
-
-```bash
-# Check application health
-curl http://localhost:8000/health
-
-# Check detailed status
-curl http://localhost:8000/api/status
-```
-
-### Logs
-
-```bash
-# View application logs
-docker logs singapore-lightning
-
-# Follow logs in real-time
-docker logs -f singapore-lightning
-
-# With docker-compose
-docker-compose logs -f lightning-webapp
-```
-
-### Updates
-
-```bash
-# Pull latest image
-docker-compose pull
-
-# Restart with new image
-docker-compose up -d
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Port Already in Use**:
-   ```bash
-   # Check what's using port 8000
-   lsof -i :8000
-   
-   # Use different port
-   docker run -p 8080:8000 lightning-detection
-   ```
-
-2. **API Connection Issues**:
-   - Check internet connectivity
-   - Verify NEA API is accessible
-   - Check firewall settings
-
-3. **Map Not Loading**:
-   - Verify JavaScript is enabled
-   - Check browser console for errors
-   - Ensure CDN resources are accessible
-
-### Synology-Specific Issues
-
-1. **Docker Permission Issues**:
-   ```bash
-   # Fix permissions
-   sudo chown -R 1026:100 /volume1/docker/lightning-detection
-   ```
-
-2. **Network Issues**:
-   - Ensure Docker bridge network is enabled
-   - Check firewall rules in Security Center
-
-3. **Resource Limits**:
-   - Monitor CPU and memory usage in Resource Monitor
-   - Adjust container limits if needed
-
-## API Documentation
-
-### Endpoints
-
-- `GET /` - Main application interface
-- `GET /api/lightning` - Get current lightning data as JSON
-- `GET /api/refresh` - Refresh data and get updated information
-- `GET /api/status` - Get application status
-- `GET /health` - Health check endpoint
-- `GET /map-only` - Get just the map HTML
-
-### Example API Response
-
+**For Docker Desktop (Windows/macOS):**
+1. Open Docker Desktop settings
+2. Go to **Docker Engine**
+3. Add the insecure registry to the configuration:
 ```json
 {
-  "success": true,
-  "coordinates": [
-    {
-      "latitude": 1.3521,
-      "longitude": 103.8198,
-      "type": "C",
-      "description": "Cloud to Cloud",
-      "datetime": "2025-01-16T11:35:37+08:00"
-    }
-  ],
-  "total_strikes": 1,
-  "records_with_lightning": 1,
-  "timestamp": "2025-01-16T11:36:00+08:00"
+  "insecure-registries": ["192.168.31.112:9500"]
 }
 ```
+4. Click **Apply & Restart**
 
-## Security Considerations
+**For Synology Docker (if pushing from another container on the same NAS):**
+```bash
+# SSH into your Synology NAS
+ssh admin@192.168.31.112
 
-### Production Security
+# Edit Docker daemon configuration
+sudo mkdir -p /var/packages/Docker/etc
+sudo tee /var/packages/Docker/etc/dockerd.json <<EOF
+{
+  "insecure-registries": ["192.168.31.112:9500"]
+}
+EOF
 
-1. **Reverse Proxy**: Use nginx for SSL termination
-2. **Network**: Run on private network when possible
-3. **Updates**: Keep Docker images updated
-4. **Monitoring**: Set up log monitoring and alerts
+# Restart Docker package via Package Center or command line
+sudo synoservice --restart pkgctl-Docker
+```
 
-### Synology Security
+#### Build and Push to Local Registry
 
-1. **Firewall**: Configure firewall rules
-2. **SSL/TLS**: Enable HTTPS in reverse proxy
-3. **User Permissions**: Use non-admin users for Docker
-4. **Network Isolation**: Use Docker networks for isolation
+```bash
+# Build the image locally
+docker build -t lightning-detection .
 
-## Support
+# Tag for your local Synology registry
+docker tag lightning-detection:latest 192.168.31.112:9500/lightning-detection:latest
 
-### Getting Help
+# Push to your Synology registry
+docker push 192.168.31.112:9500/lightning-detection:latest
 
-1. **Check Logs**: Always check application logs first
-2. **API Status**: Verify NEA API connectivity
-3. **Network**: Test network connectivity to external services
-4. **Resources**: Monitor system resources (CPU, memory, disk)
+# Verify the push was successful
+docker images | grep 192.168.31.112:9500
+```
 
-### Reporting Issues
+#### Pull and Deploy from Local Registry
 
-When reporting issues, include:
-- Docker version and platform
-- Container logs
-- System specifications
-- Network configuration
-- Error messages and screenshots
+```bash
+# Pull from your local registry
+docker pull 192.168.31.112:9500/lightning-detection:latest
 
-## License
+# Run container from local registry image
+docker run -d \
+  --name singapore-lightning-local \
+  -p 8000:8000 \
+  --restart unless-stopped \
+  192.168.31.112:9500/lightning-detection:latest
+```
 
-This project is part of the URA Lightning Detection system. See the main repository for license information.
+#### Docker Compose with Local Registry
+
+Update your `docker-compose.yml` to use the local registry:
+
+```yaml
+version: '3.8'
+
+services:
+  lightning-webapp:
+    image: 192.168.31.112:9500/lightning-detection:latest
+    container_name: singapore-lightning
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
+
+#### Synology Registry Setup
+
+To set up the Docker Registry on your Synology NAS:
+
+1. **Install Docker Registry Package**:
+   - Open Package Center
+   - Search for "Docker Registry"
+   - Install the package
+
+2. **Configure Registry**:
+   - Open Docker Registry application
+   - Configure port: `9500`
+   - Enable HTTP (for local network use)
+   - Set storage location: `/volume1/docker/registry`
+
+3. **Verify Registry Access**:
+   ```bash
+   # Test registry connectivity
+   curl http://192.168.31.112:9500/v2/_catalog
+   
+   # Should return: {"repositories":["lightning-detection"]}
+   ```
+
+#### Troubleshooting Registry Issues
+
+**Common Registry Problems:**
+
+1. **"server gave HTTP response to HTTPS client"**:
+   - Ensure the registry is added to `insecure-registries`
+   - Restart Docker after configuration changes
+
+2. **Connection refused**:
+   - Verify registry is running on port 9500
+   - Check Synology firewall settings
+   - Ensure network connectivity: `ping 192.168.31.112`
+
+3. **Push/Pull permission denied**:
+   ```bash
+   # Check registry logs on Synology
+   docker logs docker-registry
+   
+   # Verify disk space on registry volume
+   df -h /volume1/docker/registry
+   ```
+
+4. **Registry cleanup** (remove old images):
+   ```bash
+   # SSH into Synology NAS
+   ssh admin@192.168.31.112
+   
+   # Run registry garbage collection
+   docker exec docker-registry registry garbage-collect /etc/docker/registry/config.yml
+   ```
