@@ -2228,6 +2228,58 @@ async def test_network_resilience():
 
 This simulation framework enables complete development and testing of the lightning detection system without requiring physical Raspberry Pi hardware, significantly reducing development costs and iteration time.
 
+## Notebooks
+
+### Singapore Address Geocoding
+
+The `notebooks/singapore_geocoding.ipynb` notebook provides geocoding functionality for Singapore addresses:
+
+- **Convert postal codes to coordinates**: Transform 6-digit Singapore postal codes to latitude/longitude
+- **OneMap API integration**: Uses official Singapore government geocoding service
+- **Batch processing**: Handle multiple addresses efficiently
+- **Interactive mapping**: Visualize locations on Singapore maps
+- **Sample data included**: Works offline with famous Singapore locations
+
+**Quick Example:**
+```python
+# Single postal code geocoding
+result = geocode_postal_code("238874")  # ION Orchard
+coordinates = (result['latitude'], result['longitude'])
+
+# Batch processing
+postal_codes = ["238874", "018989", "079903"]
+results_df = batch_geocode_postal_codes(postal_codes)
+```
+
+**Supported postal codes for testing:**
+- `238874` - ION Orchard
+- `018989` - Marina Bay Sands  
+- `018956` - Gardens by the Bay
+- `079903` - Singapore Zoo
+- `099253` - Sentosa Island
+
+See `notebooks/README.md` for detailed documentation.
+
+### Lightning API Testing
+
+The `notebooks/lightning_api_test.ipynb` notebook demonstrates NEA Lightning Alert API integration for real-time lightning detection monitoring.
+
 ## Usage
 
-[Add usage instructions here]
+### Running the Geocoding Notebook
+
+```bash
+# Start Jupyter Lab
+uv run jupyter lab notebooks/singapore_geocoding.ipynb
+
+# Or use the geocoding functions directly
+uv run python -c "
+from notebooks.singapore_geocoding import geocode_postal_code
+result = geocode_postal_code('238874')
+print(f'Coordinates: {result[\"latitude\"]}, {result[\"longitude\"]}')
+"
+```
+
+### Web Application
+
+For the lightning detection web application, see [WEBAPP_README.md](WEBAPP_README.md) for complete setup and usage instructions.
