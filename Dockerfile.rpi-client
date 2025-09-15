@@ -1,0 +1,52 @@
+# Dockerfile for Raspberry Pi GPIO LED Client
+FROM python:3.11-slim-bullseye
+
+# Install system dependencies for GPIO access
+RUN apt-get update && apt-get install -y \
+    gcc \
+    python3-dev \
+    python3-pip \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first for better Docker layer caching
+COPY requirements-rpi.txt .
+
+# Install Python dependencies
+RUN pip install -r requirements-rpi.txt
+
+# Copy source code
+COPY src/ ./src/
+COPY pyproject.toml .
+
+# Install the package in development mode
+RUN pip install -e .
+
+# Create non-root user (but still needs GPIO access)
+RUN useradd -m -u 1000 rpi-user && \
+    usermod -a -G dialout,gpio rpi-user 2>/dev/null || true
+
+# Set proper permissions for GPIO access
+RUN chmod +r /dev/gpiomem 2>/dev/null || true && \
+    chmod +r /dev/mem 2>/dev/null || true
+
+# Switch to non-root user
+USER rpi-user
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python3 -c "import json; print('healthy')" || exit 1
+
+# Default command - run the LED client
+CMD ["python", "src/mqtt_client.py", "--broker", "${MQTT_BROKER:-localhost}", "--port", "${MQTT_PORT:-1883}"]
+
+# Alternative entrypoints:
+# For LED server: CMD ["python", "src/mqtt_server.py", "--broker", "${MQTT_BROKER:-localhost}"]  
+# For interactive shell: CMD ["/bin/bash"]
