@@ -13,7 +13,7 @@ from datetime import datetime
 import argparse
 
 try:
-    from asyncio_mqtt import Client as MQTTClient
+    from aiomqtt import Client as MQTTClient
 except ImportError:
     # Fallback to paho-mqtt for compatibility
     import paho.mqtt.client as mqtt_client
@@ -70,7 +70,7 @@ class LEDControlServer:
             async with MQTTClient(
                 hostname=self.broker_host,
                 port=self.broker_port,
-                client_id=self.client_id,
+                identifier=self.client_id,
             ) as client:
                 await client.publish(self.topic, command_json, qos=1)
                 logger.info(
@@ -84,20 +84,21 @@ class LEDControlServer:
     async def _send_with_paho_mqtt(self, command_json: str):
         """Send command using paho-mqtt client (synchronous fallback)."""
 
-        def on_connect(client, userdata, flags, rc):
-            if rc == 0:
+        def on_connect(client, userdata, flags, reason_code, properties):
+            if reason_code == 0:
                 logger.info("Connected to MQTT broker")
                 client.publish(self.topic, command_json, qos=1)
                 logger.info(f"✅ Command sent via paho-mqtt: {command_json}")
             else:
-                logger.error(f"Failed to connect to MQTT broker: {rc}")
+                logger.error(f"Failed to connect to MQTT broker: {reason_code}")
 
         def on_publish(client, userdata, mid):
             logger.info("Message published successfully")
             client.disconnect()
 
         try:
-            client = mqtt_client.Client(client_id=self.client_id)
+            # Use CallbackAPIVersion.VERSION2 for paho-mqtt 2.0+ compatibility
+            client = mqtt_client.Client(client_id=self.client_id, callback_api_version=mqtt_client.CallbackAPIVersion.VERSION2)
             client.on_connect = on_connect
             client.on_publish = on_publish
 

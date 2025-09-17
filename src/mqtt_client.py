@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any
 import argparse
 
 try:
-    from asyncio_mqtt import Client as MQTTClient
+    from aiomqtt import Client as MQTTClient
 except ImportError:
     # Fallback to paho-mqtt for compatibility
     import paho.mqtt.client as mqtt_client
@@ -279,7 +279,7 @@ class LEDControlClient:
             async with MQTTClient(
                 hostname=self.broker_host,
                 port=self.broker_port,
-                client_id=self.client_id,
+                identifier=self.client_id,
             ) as client:
                 await client.subscribe(self.topic)
                 logger.info(
@@ -287,18 +287,17 @@ class LEDControlClient:
                 )
                 logger.info(f"👂 Listening on topic: {self.topic}")
 
-                async with client.messages() as messages:
-                    async for message in messages:
-                        if not self.running:
-                            break
+                async for message in client.messages:
+                    if not self.running:
+                        break
 
-                        try:
-                            command = json.loads(message.payload.decode())
-                            await self.process_command(command)
-                        except json.JSONDecodeError as e:
-                            logger.error(f"❌ Invalid JSON received: {e}")
-                        except Exception as e:
-                            logger.error(f"❌ Error processing message: {e}")
+                    try:
+                        command = json.loads(message.payload.decode())
+                        await self.process_command(command)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ Invalid JSON received: {e}")
+                    except Exception as e:
+                        logger.error(f"❌ Error processing message: {e}")
 
         except Exception as e:
             logger.error(f"❌ MQTT client error: {e}")
@@ -307,15 +306,15 @@ class LEDControlClient:
     async def _start_with_paho_mqtt(self):
         """Start client using paho-mqtt (fallback)."""
 
-        def on_connect(client, userdata, flags, rc):
-            if rc == 0:
+        def on_connect(client, userdata, flags, reason_code, properties):
+            if reason_code == 0:
                 logger.info(
                     f"📡 Connected to MQTT broker at {self.broker_host}:{self.broker_port}"
                 )
                 client.subscribe(self.topic)
                 logger.info(f"👂 Listening on topic: {self.topic}")
             else:
-                logger.error(f"❌ Failed to connect to MQTT broker: {rc}")
+                logger.error(f"❌ Failed to connect to MQTT broker: {reason_code}")
 
         def on_message(client, userdata, msg):
             try:
@@ -328,7 +327,8 @@ class LEDControlClient:
                 logger.error(f"❌ Error processing message: {e}")
 
         try:
-            client = mqtt_client.Client(client_id=self.client_id)
+            # Use CallbackAPIVersion.VERSION2 for paho-mqtt 2.0+ compatibility
+            client = mqtt_client.Client(client_id=self.client_id, callback_api_version=mqtt_client.CallbackAPIVersion.VERSION2)
             client.on_connect = on_connect
             client.on_message = on_message
 
