@@ -7,7 +7,7 @@ services:
     container_name: lightning-mqtt-broker
     ports:
       - "1883:1883"
-      - "9001:9001"
+      - "9005:9001"
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto_data:/mosquitto/data
