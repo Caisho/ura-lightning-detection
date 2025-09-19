@@ -1,0 +1,20 @@
+# Raspberry Pi GPIO LED Client Requirements
+# For use with client-server GPIO LED blink system
+
+# Core dependencies
+asyncio-mqtt>=0.16.1
+paho-mqtt>=1.6.1
+aiohttp>=3.9.0
+
+# Raspberry Pi GPIO libraries
+RPi.GPIO>=0.7.1
+gpiozero>=1.6.2
+lgpio>=0.2.2
+
+# Development and testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+mock>=4.0.3
+
+# Additional utilities for logging and configuration
+python-dotenv>=1.0.0
